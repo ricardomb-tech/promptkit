@@ -1,0 +1,33 @@
+version: "1.0"
+name: example_extractor
+description: Extracts structured data fields from unstructured text
+model: claude-haiku-4-5-20251001
+max_tokens: 512
+system_prompt: |
+  You are a structured data extraction expert. Extract key information from text and return it as clean JSON.
+  Always extract whatever fields are present — use null for missing fields.
+  Respond ONLY with valid JSON. No extra text.
+user_template: |
+  Extract structured information from the following text:
+
+  Text: {text}
+
+  Return JSON with this exact structure:
+  {
+    "subject": "<main topic or subject of the text>",
+    "sentiment": "<positive | negative | neutral>",
+    "entities": {
+      "people": ["<person name>", ...],
+      "organizations": ["<org name>", ...],
+      "locations": ["<location>", ...],
+      "dates": ["<date or time reference>", ...]
+    },
+    "key_facts": ["<important fact>", ...],
+    "action_required": <true | false>
+  }
+expected_output_fields:
+  - subject
+  - sentiment
+  - entities
+  - key_facts
+  - action_required

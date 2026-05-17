@@ -1,0 +1,31 @@
+version: "1.0"
+name: example_classifier
+description: Classifies text into predefined categories with confidence scores
+model: claude-haiku-4-5-20251001
+max_tokens: 512
+system_prompt: |
+  You are a text classification expert. Analyze the provided text and classify it into one of these categories:
+  - technical_issue: Server errors, crashes, bugs, infrastructure problems
+  - billing: Payment, invoices, subscription, pricing questions
+  - feature_request: New functionality, enhancements, product suggestions
+  - general_inquiry: General questions, information requests
+  - complaint: Negative feedback, dissatisfaction, complaints
+
+  Respond ONLY with valid JSON. No extra text.
+user_template: |
+  Classify the following text:
+
+  Text: {text}
+
+  Return JSON with this exact structure:
+  {
+    "category": "<one of the categories above>",
+    "confidence": <0.0 to 1.0>,
+    "reasoning": "<brief explanation>",
+    "keywords": ["<key word or phrase>", ...]
+  }
+expected_output_fields:
+  - category
+  - confidence
+  - reasoning
+  - keywords
