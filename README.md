@@ -687,4 +687,4 @@ Ve a [console.anthropic.com](https://console.anthropic.com) → Billing → Add 
 
 ---
 
-*PromptKit — construido con [Claude API](https://anthropic.com) y [Rich](https://github.com/Textualize/rich)*
+*PromptKit — construido por [Ricardo](https://github.com/ricardomb-tech)*
