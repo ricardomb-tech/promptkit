@@ -24,19 +24,24 @@ console = Console()
 kit = None  # lazy-initialised
 
 
-def _get_kit(mock: bool = False) -> PromptKit:
+def _get_kit(
+    mock: bool = False,
+    provider: str = "anthropic",
+    ollama_url: str = "http://localhost:11434",
+) -> PromptKit:
     global kit
-    if kit is None or mock:
-        if not mock and not os.environ.get("ANTHROPIC_API_KEY"):
-            console.print(
-                "[red]Error:[/red] ANTHROPIC_API_KEY is not set.\n"
-                "Set it in your shell or create a [bold].env[/bold] file:\n"
-                "  ANTHROPIC_API_KEY=sk-ant-..."
-            )
-            sys.exit(1)
-        if mock:
-            return PromptKit(mock=True)
-        kit = PromptKit()
+    if mock:
+        return PromptKit(mock=True)
+    if provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print(
+            "[red]Error:[/red] ANTHROPIC_API_KEY no está configurada.\n"
+            "Agrégala al archivo [bold].env[/bold]:\n"
+            "  ANTHROPIC_API_KEY=sk-ant-..."
+        )
+        sys.exit(1)
+    # Crea instancia fresca si cambió el provider/url
+    if kit is None or getattr(kit, "_provider", None) != provider:
+        kit = PromptKit(provider=provider, ollama_url=ollama_url)
     return kit
 
 
@@ -50,22 +55,26 @@ def cli():
 # ---------------------------------------------------------------------------
 
 _MODEL_HELP = (
-    "Override the model from the YAML. "
-    "Options: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-7, "
-    "or any valid Anthropic model ID."
+    "Modelo a usar (anula el del YAML). "
+    "Anthropic: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-7. "
+    "Ollama: llama3.2, mistral, qwen2.5, phi3.5, etc."
 )
+_PROVIDER_HELP = "Provider de IA: 'anthropic' (default) u 'ollama' (local, gratis)."
+_OLLAMA_URL_HELP = "URL de Ollama (default: http://localhost:11434)."
 
 
 @cli.command("run")
 @click.argument("prompt_yaml", type=click.Path(exists=True))
-@click.option("--input", "-i", "input_json", default=None, help="JSON string of input variables")
+@click.option("--input", "-i", "input_json", default=None, help="JSON string de variables de entrada")
 @click.option("--input-file", "input_file", default=None, type=click.Path(exists=True),
-              help="JSON file with a single input object")
+              help="Archivo JSON con un objeto de entrada")
 @click.option("--model", "-m", default=None, help=_MODEL_HELP)
-@click.option("--mock", is_flag=True, default=False, help="Use mock responses (no API call, for testing)")
-@click.option("--save/--no-save", default=True, help="Save result to disk")
+@click.option("--provider", "-p", default="anthropic", help=_PROVIDER_HELP)
+@click.option("--ollama-url", default="http://localhost:11434", help=_OLLAMA_URL_HELP)
+@click.option("--mock", is_flag=True, default=False, help="Respuestas simuladas (sin llamar a la API)")
+@click.option("--save/--no-save", default=True, help="Guardar resultado en disco")
 def run_cmd(prompt_yaml: str, input_json: str | None, input_file: str | None,
-            model: str | None, mock: bool, save: bool):
+            model: str | None, provider: str, ollama_url: str, mock: bool, save: bool):
     """Run a prompt — asks for input interactively if no --input/--input-file given."""
     if input_file:
         with open(input_file, "r", encoding="utf-8") as fh:
@@ -88,11 +97,13 @@ def run_cmd(prompt_yaml: str, input_json: str | None, input_file: str | None,
         input_vars = _ask_input_vars(prompt_yaml)
 
     spec_name = Path(prompt_yaml).stem
-    model_label = f" [dim]({model})[/dim]" if model else ""
-    console.print(Panel(f"[bold cyan]Running:[/bold cyan] {spec_name}{model_label}", expand=False))
+    _print_run_header(spec_name, model, provider, mock)
 
-    with console.status("[bold green]Llamando a Claude API…"):
-        result = _get_kit(mock=mock).run(prompt_yaml, input_vars, model=model)
+    status_msg = "[bold green]Consultando Ollama…" if provider == "ollama" else "[bold green]Llamando a Claude API…"
+    with console.status(status_msg):
+        result = _get_kit(mock=mock, provider=provider, ollama_url=ollama_url).run(
+            prompt_yaml, input_vars, model=model
+        )
 
     _print_result(result)
 
@@ -108,9 +119,11 @@ def run_cmd(prompt_yaml: str, input_json: str | None, input_file: str | None,
 @cli.command("chat")
 @click.argument("prompt_yaml", type=click.Path(exists=True))
 @click.option("--model", "-m", default=None, help=_MODEL_HELP)
-@click.option("--mock", is_flag=True, default=False, help="Use mock responses (no API call)")
-@click.option("--save/--no-save", default=True, help="Save each result to disk")
-def chat_cmd(prompt_yaml: str, model: str | None, mock: bool, save: bool):
+@click.option("--provider", "-p", default="anthropic", help=_PROVIDER_HELP)
+@click.option("--ollama-url", default="http://localhost:11434", help=_OLLAMA_URL_HELP)
+@click.option("--mock", is_flag=True, default=False, help="Respuestas simuladas")
+@click.option("--save/--no-save", default=True, help="Guardar cada resultado en disco")
+def chat_cmd(prompt_yaml: str, model: str | None, provider: str, ollama_url: str, mock: bool, save: bool):
     """Loop interactivo: escribe tus entradas, ve el resultado, repite. Ctrl+C para salir."""
     import yaml as _yaml
     with open(prompt_yaml, "r", encoding="utf-8") as fh:
@@ -118,17 +131,19 @@ def chat_cmd(prompt_yaml: str, model: str | None, mock: bool, save: bool):
 
     spec_name = Path(prompt_yaml).stem
     variables = _template_vars(spec.get("user_template", ""))
-    model_label = f" ({model})" if model else f" ({spec.get('model', 'haiku')})"
+    eff_model = model or spec.get("model", "llama3.2" if provider == "ollama" else "haiku")
+    provider_badge = "[green]ollama[/green]" if provider == "ollama" else "[cyan]anthropic[/cyan]"
 
     console.print(Panel(
-        f"[bold cyan]Chat mode:[/bold cyan] [yellow]{spec_name}[/yellow]{model_label}\n"
+        f"[bold cyan]Chat mode:[/bold cyan] [yellow]{spec_name}[/yellow] "
+        f"[dim]({eff_model})[/dim] {provider_badge}\n"
         f"[dim]Variables: {', '.join(variables) if variables else 'ninguna'}[/dim]\n"
         f"[dim]Escribe tus respuestas. Presiona [bold]Ctrl+C[/bold] para salir.[/dim]",
         border_style="cyan",
         expand=False,
     ))
 
-    kit_instance = _get_kit(mock=mock)
+    kit_instance = _get_kit(mock=mock, provider=provider, ollama_url=ollama_url)
     run_count = 0
 
     try:
@@ -174,11 +189,14 @@ def chat_cmd(prompt_yaml: str, model: str | None, mock: bool, save: bool):
 @cli.command("batch")
 @click.argument("prompt_yaml", type=click.Path(exists=True))
 @click.option("--file", "-f", "inputs_file", required=True, type=click.Path(exists=True),
-              help="JSON file with list of input objects")
+              help="Archivo JSON con lista de entradas")
 @click.option("--model", "-m", default=None, help=_MODEL_HELP)
-@click.option("--mock", is_flag=True, default=False, help="Use mock responses (no API call)")
+@click.option("--provider", "-p", default="anthropic", help=_PROVIDER_HELP)
+@click.option("--ollama-url", default="http://localhost:11434", help=_OLLAMA_URL_HELP)
+@click.option("--mock", is_flag=True, default=False, help="Respuestas simuladas")
 @click.option("--save/--no-save", default=True)
-def batch_cmd(prompt_yaml: str, inputs_file: str, model: str | None, mock: bool, save: bool):
+def batch_cmd(prompt_yaml: str, inputs_file: str, model: str | None,
+              provider: str, ollama_url: str, mock: bool, save: bool):
     """Run a prompt against multiple inputs from a JSON file."""
     with open(inputs_file, "r", encoding="utf-8") as fh:
         inputs = json.load(fh)
@@ -188,17 +206,19 @@ def batch_cmd(prompt_yaml: str, inputs_file: str, model: str | None, mock: bool,
         sys.exit(1)
 
     spec_name = Path(prompt_yaml).stem
+    provider_badge = "[green]ollama[/green]" if provider == "ollama" else "[cyan]anthropic[/cyan]"
     model_label = f" [dim]({model})[/dim]" if model else ""
     console.print(Panel(
-        f"[bold cyan]Batch run:[/bold cyan] {spec_name}{model_label}  ({len(inputs)} inputs)",
+        f"[bold cyan]Batch run:[/bold cyan] {spec_name}{model_label} {provider_badge}  ({len(inputs)} entradas)",
         expand=False,
     ))
 
+    kit_b = _get_kit(mock=mock, provider=provider, ollama_url=ollama_url)
     results = []
-    with console.status("[bold green]Running batch…") as status:
+    with console.status("[bold green]Procesando batch…") as status:
         for idx, iv in enumerate(inputs, 1):
-            status.update(f"[bold green]Input {idx}/{len(inputs)}…")
-            results.append(_get_kit(mock=mock).run(prompt_yaml, iv, model=model))
+            status.update(f"[bold green]Entrada {idx}/{len(inputs)}…")
+            results.append(kit_b.run(prompt_yaml, iv, model=model))
 
     console.print(summary_table(results))
     _print_aggregate(results)
@@ -218,18 +238,24 @@ def batch_cmd(prompt_yaml: str, inputs_file: str, model: str | None, mock: bool,
 @click.argument("prompt_b", type=click.Path(exists=True))
 @click.option("--file", "-f", "inputs_file", required=True, type=click.Path(exists=True),
               help="JSON file with list of input objects")
-@click.option("--model-a", default=None, help="Override model for prompt A")
-@click.option("--model-b", default=None, help="Override model for prompt B")
-@click.option("--model", "-m", default=None, help="Override model for BOTH prompts")
-@click.option("--mock", is_flag=True, default=False, help="Use mock responses (no API call)")
+@click.option("--model-a", default=None, help="Modelo para prompt A")
+@click.option("--model-b", default=None, help="Modelo para prompt B")
+@click.option("--model", "-m", default=None, help="Modelo para AMBOS prompts")
+@click.option("--provider", "-p", default="anthropic", help=_PROVIDER_HELP)
+@click.option("--provider-a", default=None, help="Provider solo para prompt A (anthropic/ollama)")
+@click.option("--provider-b", default=None, help="Provider solo para prompt B (anthropic/ollama)")
+@click.option("--ollama-url", default="http://localhost:11434", help=_OLLAMA_URL_HELP)
+@click.option("--mock", is_flag=True, default=False, help="Respuestas simuladas")
 @click.option("--save/--no-save", default=True)
 def compare_cmd(prompt_a: str, prompt_b: str, inputs_file: str,
                 model_a: str | None, model_b: str | None, model: str | None,
-                mock: bool, save: bool):
+                provider: str, provider_a: str | None, provider_b: str | None,
+                ollama_url: str, mock: bool, save: bool):
     """A/B test two prompts on the same inputs."""
-    # --model sets both; --model-a/--model-b override individually
-    eff_model_a = model_a or model
-    eff_model_b = model_b or model
+    eff_model_a    = model_a or model
+    eff_model_b    = model_b or model
+    eff_provider_a = provider_a or provider
+    eff_provider_b = provider_b or provider
 
     with open(inputs_file, "r", encoding="utf-8") as fh:
         inputs = json.load(fh)
@@ -237,18 +263,27 @@ def compare_cmd(prompt_a: str, prompt_b: str, inputs_file: str,
     name_a = Path(prompt_a).stem
     name_b = Path(prompt_b).stem
 
-    ma_label = f" ({eff_model_a})" if eff_model_a else ""
-    mb_label = f" ({eff_model_b})" if eff_model_b else ""
+    def _plabel(m, p):
+        parts = []
+        if m: parts.append(m)
+        if p != "anthropic": parts.append(p)
+        return f" ({', '.join(parts)})" if parts else ""
+
     console.print(Panel(
-        f"[bold cyan]Comparing:[/bold cyan] "
-        f"[yellow]{name_a}{ma_label}[/yellow] vs [magenta]{name_b}{mb_label}[/magenta]  "
-        f"({len(inputs)} inputs each)",
+        f"[bold cyan]Comparando:[/bold cyan] "
+        f"[yellow]{name_a}{_plabel(eff_model_a, eff_provider_a)}[/yellow] vs "
+        f"[magenta]{name_b}{_plabel(eff_model_b, eff_provider_b)}[/magenta]  "
+        f"({len(inputs)} entradas cada uno)",
         expand=False,
     ))
 
-    with console.status("[bold green]Running comparison…"):
-        comparison = _get_kit(mock=mock).compare(prompt_a, prompt_b, inputs,
-                                                  model_a=eff_model_a, model_b=eff_model_b)
+    with console.status("[bold green]Ejecutando comparación…"):
+        kit_c = _get_kit(mock=mock, provider=eff_provider_a, ollama_url=ollama_url)
+        comparison = kit_c.compare(
+            prompt_a, prompt_b, inputs,
+            model_a=eff_model_a, model_b=eff_model_b,
+            provider_a=eff_provider_a, provider_b=eff_provider_b,
+        )
 
     # Side-by-side stats table
     stats_a = comparison["prompt_a"]["stats"]
@@ -393,6 +428,16 @@ def new_cmd(name: str):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _print_run_header(spec_name: str, model: str | None, provider: str, mock: bool) -> None:
+    provider_badge = "[green]ollama[/green]" if provider == "ollama" else "[cyan]anthropic[/cyan]"
+    mock_badge = " [dim][MOCK][/dim]" if mock else ""
+    model_label = f" [dim]({model})[/dim]" if model else ""
+    console.print(Panel(
+        f"[bold cyan]Ejecutando:[/bold cyan] {spec_name}{model_label} {provider_badge}{mock_badge}",
+        expand=False,
+    ))
+
 
 def _template_vars(template: str) -> list[str]:
     """Return unique placeholder names found in a template, in order of appearance."""

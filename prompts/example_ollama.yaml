@@ -1,0 +1,26 @@
+version: "1.0"
+name: example_ollama
+description: Ejemplo de prompt optimizado para modelos locales de Ollama
+model: llama3.2
+provider: ollama
+max_tokens: 512
+system_prompt: |
+  Eres un asistente experto en análisis de texto.
+  Responde SIEMPRE con JSON válido. Sin texto extra, sin explicaciones fuera del JSON.
+user_template: |
+  Analiza el siguiente texto y clasifícalo.
+
+  Texto: {text}
+
+  Responde con este JSON exacto:
+  {
+    "categoria": "<tecnico | facturacion | solicitud | queja | consulta>",
+    "sentimiento": "<positivo | negativo | neutro>",
+    "urgencia": "<alta | media | baja>",
+    "resumen": "<una oración resumiendo el texto>"
+  }
+expected_output_fields:
+  - categoria
+  - sentimiento
+  - urgencia
+  - resumen
