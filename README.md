@@ -578,6 +578,4 @@ Ve a [console.anthropic.com](https://console.anthropic.com) → Billing → Add 
 ---
 
 *PromptKit — construido por [Ricardo](https://github.com/ricardomb-tech)*
-=======
-*PromptKit — construido con [Claude API](https://anthropic.com), [Ollama](https://ollama.com) y [Rich](https://github.com/Textualize/rich)*
->>>>>>> Stashed changes
+
